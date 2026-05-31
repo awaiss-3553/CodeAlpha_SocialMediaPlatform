@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CodeAlpha Mini Social Media</title>
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Mini Social</div>
+    <div class="top-actions">
+      <span class="muted" id="whoami"></span>
+      <button class="btn secondary hidden" id="logoutBtn">Logout</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <section id="authBox" class="card">
+      <h2 id="authTitle">Login</h2>
+      <input type="text" id="username" placeholder="Username" autocomplete="username" />
+      <input type="password" id="password" placeholder="Password" autocomplete="current-password" />
+      <button class="btn primary" id="mainAuthBtn">Login</button>
+
+      <p class="muted small center">
+        Account nahi hai?
+        <a href="#" id="toggleAuthLink">Register karein</a>
+      </p>
+    </section>
+
+    <section id="feedBox" class="card hidden">
+      <h2>Welcome, <span id="currentUser"></span>!</h2>
+      <textarea id="postContent" rows="3" placeholder="Apne khayalat share karein..."></textarea>
+      <button class="btn primary" id="postBtn">Post Karein</button>
+      <p class="muted small" id="feedMsg"></p>
+    </section>
+
+    <section class="postsWrap">
+      <h3 class="muted">Feed</h3>
+      <div id="postsContainer"></div>
+    </section>
+  </main>
+
+  <script>
+    const API_URL = "http://localhost:5000/api";
+    let isLoginMode = true;
+    let loggedInUser = "";
+    let token = localStorage.getItem("token") || "";
+
+    const $ = (id) => document.getElementById(id);
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+      }[c]));
+    }
+
+    function setAuthUI() {
+      const authed = !!token;
+      $("authBox").classList.toggle("hidden", authed);
+      $("feedBox").classList.toggle("hidden", !authed);
+      $("logoutBtn").classList.toggle("hidden", !authed);
+      $("whoami").textContent = authed ? `Logged in as @${loggedInUser}` : "";
+      if (authed) $("currentUser").innerText = loggedInUser;
+    }
+
+    function toggleAuthMode(e) {
+      e.preventDefault();
+      isLoginMode = !isLoginMode;
+      $("authTitle").innerText = isLoginMode ? "Login" : "Register";
+      $("mainAuthBtn").innerText = isLoginMode ? "Login" : "Register";
+      $("toggleAuthLink").innerText = isLoginMode ? "Register karein" : "Login karein";
+    }
+
+    async function handleAuth() {
+      const username = $("username").value.trim();
+      const password = $("password").value;
+      const endpoint = isLoginMode ? "/login" : "/register";
+
+      if (!username || !password) return alert("Fields fill karein!");
+
+      const res = await fetch(API_URL + endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      alert(data.message || "Done");
+
+      // ✅ AUTO LOGIN for both login and register
+      if (res.ok) {
+        // backend must return: { username, token }
+        loggedInUser = data.username || username;
+        token = data.token || "";
+
+        if (!token) {
+          alert("Token missing from backend. Please update /api/login and /api/register to return token.");
+          return;
+        }
+
+        localStorage.setItem("token", token);
+        localStorage.setItem("username", loggedInUser);
+
+        $("username").value = "";
+        $("password").value = "";
+
+        setAuthUI();
+        loadPosts();
+      }
+    }
+
+    async function logout() {
+      try {
+        await fetch(API_URL + "/logout", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      } catch {}
+
+      token = "";
+      loggedInUser = "";
+      localStorage.removeItem("token");
+      localStorage.removeItem("username");
+
+      setAuthUI();
+      loadPosts();
+    }
+
+    async function createPost() {
+      const content = $("postContent").value.trim();
+      if (!content) return alert("Kuch likhein!");
+
+      const res = await fetch(API_URL + "/posts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ content })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.message || "Failed");
+
+      $("postContent").value = "";
+      loadPosts();
+    }
+
+    async function loadPosts() {
+      const res = await fetch(API_URL + "/posts");
+      const posts = await res.json().catch(() => []);
+
+      const container = $("postsContainer");
+      container.innerHTML = "";
+
+      posts.forEach((post) => {
+        const likedByMe = token && post.likes.includes(loggedInUser);
+        const canEdit = token && post.username === loggedInUser;
+
+        const postEl = document.createElement("div");
+        postEl.className = "post-card";
+        postEl.innerHTML = `
+          <div class="post-head">
+            <div class="post-user">@${escapeHtml(post.username)}</div>
+            <div class="muted small">${new Date(post.createdAt).toLocaleString()}</div>
+          </div>
+
+          <div class="post-content">${escapeHtml(post.content)}</div>
+
+          <div class="actions">
+            <button class="btn chip" data-like>👍 ${post.likes.length} ${likedByMe ? "Liked" : "Like"}</button>
+            ${canEdit ? `<button class="btn chip" data-edit>Edit</button>` : ""}
+            ${canEdit ? `<button class="btn chip danger" data-delete>Delete</button>` : ""}
+          </div>
+
+          <div class="comment-section">
+            <div class="comments" id="comments-${post.id}">
+              ${post.comments.map(c => `
+                <div class="comment">
+                  <b>@${escapeHtml(c.username)}:</b> ${escapeHtml(c.text)}
+                </div>
+              `).join("")}
+            </div>
+
+            <div class="comment-row">
+              <input type="text" id="comment-input-${post.id}" placeholder="Comment likhein..." />
+              <button class="btn small primary" data-comment>Send</button>
+            </div>
+          </div>
+        `;
+
+        postEl.querySelector("[data-like]").onclick = () => likePost(post.id);
+        const editBtn = postEl.querySelector("[data-edit]");
+        if (editBtn) editBtn.onclick = () => editPost(post.id, post.content);
+        const delBtn = postEl.querySelector("[data-delete]");
+        if (delBtn) delBtn.onclick = () => deletePost(post.id);
+
+        postEl.querySelector("[data-comment]").onclick = () => addComment(post.id);
+
+        container.appendChild(postEl);
+      });
+    }
+
+    async function likePost(id) {
+      if (!token) return alert("Like karne ke liye login karein.");
+
+      await fetch(`${API_URL}/posts/${id}/like`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      loadPosts();
+    }
+
+    async function addComment(id) {
+      if (!token) return alert("Comment karne ke liye login karein.");
+
+      const input = document.getElementById(`comment-input-${id}`);
+      const text = input.value.trim();
+      if (!text) return;
+
+      const res = await fetch(`${API_URL}/posts/${id}/comment`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ commentText: text })
+      });
+
+      if (res.ok) {
+        input.value = "";
+        loadPosts();
+      }
+    }
+
+    async function deletePost(id) {
+      if (!confirm("Delete this post?")) return;
+
+      const res = await fetch(`${API_URL}/posts/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.message || "Delete failed");
+
+      loadPosts();
+    }
+
+    async function editPost(id, oldContent) {
+      const content = prompt("Edit your post:", oldContent);
+      if (content === null) return;
+
+      const res = await fetch(`${API_URL}/posts/${id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ content })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) return alert(data.message || "Edit failed");
+
+      loadPosts();
+    }
+
+    // Wire UI
+    $("toggleAuthLink").addEventListener("click", toggleAuthMode);
+    $("mainAuthBtn").addEventListener("click", handleAuth);
+    $("postBtn").addEventListener("click", createPost);
+    $("logoutBtn").addEventListener("click", logout);
+
+    // restore login if token exists
+    const savedUser = localStorage.getItem("username") || "";
+    if (token && savedUser) loggedInUser = savedUser;
+
+    setAuthUI();
+    loadPosts();
+  </script>
+</body>
+</html>
